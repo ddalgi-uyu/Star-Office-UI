@@ -5,6 +5,7 @@ from flask import Flask, jsonify, send_from_directory, make_response, request, s
 from datetime import datetime, timedelta
 import json
 import os
+import base64
 import random
 import math
 import re
@@ -42,6 +43,7 @@ FRONTEND_ELECTRON_STANDALONE_FILE = os.path.join(FRONTEND_DIR, "electron-standal
 STATE_FILE = os.path.join(ROOT_DIR, "state.json")
 AGENTS_STATE_FILE = os.path.join(ROOT_DIR, "agents-state.json")
 JOIN_KEYS_FILE = os.path.join(ROOT_DIR, "join-keys.json")
+SCREENS_DIR = os.path.join(ROOT_DIR, ".screens")
 FRONTEND_PATH = Path(FRONTEND_DIR)
 ASSET_ALLOWED_EXTS = {".png", ".webp", ".jpg", ".jpeg", ".gif", ".svg", ".avif"}
 ASSET_TEMPLATE_ZIP = os.path.join(ROOT_DIR, "assets-replace-template.zip")
@@ -1175,6 +1177,10 @@ def agent_push():
         state = (data.get("state") or "").strip()
         detail = (data.get("detail") or "").strip()
         name = (data.get("name") or "").strip()
+        # Optional extras: custom speech line + current app (for icon popup).
+        # Only overwritten when the key is present, so pushers can send them selectively.
+        message = data.get("message")
+        app = data.get("app")
 
         if not agent_id or not join_key or not state:
             return jsonify({"ok": False, "msg": "缺少 agentId/joinKey/state"}), 400
@@ -1224,11 +1230,82 @@ def agent_push():
         target["area"] = state_to_area(state)
         target["source"] = "remote-openclaw"
         target["lastPushAt"] = datetime.now().isoformat()
+        if message is not None:
+            target["message"] = str(message).strip()[:120]
+        if app is not None:
+            target["app"] = str(app).strip()[:40]
 
         save_agents_state(agents)
         return jsonify({"ok": True, "agentId": agent_id, "area": target.get("area")})
     except Exception as e:
         return jsonify({"ok": False, "msg": str(e)}), 500
+
+
+def _safe_agent_filename(agent_id):
+    return re.sub(r"[^A-Za-z0-9_.-]", "_", agent_id or "")[:80]
+
+
+@app.route("/agent-screen", methods=["POST"])
+def agent_screen():
+    """Receive a small active-window thumbnail (base64 JPEG) from an agent.
+
+    Body: {agentId, joinKey, image}  where image is base64-encoded JPEG bytes.
+    The main (host) agent may post without a joinKey (trusted/local).
+    Thumbnails are stored as files under SCREENS_DIR — NOT in agents-state.json —
+    so that per-push JSON writes stay small; only a `screenUpdatedAt` flag is kept.
+    """
+    try:
+        data = request.get_json(silent=True)
+        if not isinstance(data, dict):
+            return jsonify({"ok": False, "msg": "invalid json"}), 400
+
+        agent_id = (data.get("agentId") or "").strip()
+        join_key = (data.get("joinKey") or "").strip()
+        image_b64 = data.get("image") or ""
+        if not agent_id or not image_b64:
+            return jsonify({"ok": False, "msg": "缺少 agentId/image"}), 400
+
+        agents = load_agents_state()
+        target = next((a for a in agents if a.get("agentId") == agent_id), None)
+        if not target:
+            return jsonify({"ok": False, "msg": "agent 未注册"}), 404
+
+        # Guests must present a matching, authorized joinKey; the host may skip it.
+        if not target.get("isMain"):
+            if not join_key or target.get("joinKey") != join_key:
+                return jsonify({"ok": False, "msg": "joinKey 不匹配"}), 403
+            if target.get("authStatus") not in {"approved", "offline"}:
+                return jsonify({"ok": False, "msg": "agent 未获授权"}), 403
+
+        try:
+            raw = base64.b64decode(image_b64, validate=False)
+        except Exception:
+            return jsonify({"ok": False, "msg": "image 不是合法 base64"}), 400
+        if len(raw) > 2_000_000:  # defensive: thumbnails should be a few KB
+            return jsonify({"ok": False, "msg": "image 太大"}), 413
+
+        os.makedirs(SCREENS_DIR, exist_ok=True)
+        fname = _safe_agent_filename(agent_id) + ".jpg"
+        with open(os.path.join(SCREENS_DIR, fname), "wb") as f:
+            f.write(raw)
+
+        target["screenUpdatedAt"] = datetime.now().isoformat()
+        save_agents_state(agents)
+        return jsonify({"ok": True, "agentId": agent_id})
+    except Exception as e:
+        return jsonify({"ok": False, "msg": str(e)}), 500
+
+
+@app.route("/agent-screen/<agent_id>", methods=["GET"])
+def get_agent_screen(agent_id):
+    """Serve an agent's latest active-window thumbnail (JPEG), if any."""
+    fname = _safe_agent_filename(agent_id) + ".jpg"
+    fpath = os.path.join(SCREENS_DIR, fname)
+    if not os.path.exists(fpath):
+        return jsonify({"ok": False, "msg": "no screen"}), 404
+    resp = make_response(send_from_directory(SCREENS_DIR, fname, mimetype="image/jpeg"))
+    resp.headers["Cache-Control"] = "no-store, must-revalidate"
+    return resp
 
 
 @app.route("/health", methods=["GET"])
