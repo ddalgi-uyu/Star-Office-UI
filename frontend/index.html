@@ -3526,6 +3526,52 @@ function toggleBrokerPanel() {
             return arr[idx % arr.length];
         }
 
+        // --- Live active-window "monitor" floating above each guest character ---
+        const GSCREEN_W = 128, GSCREEN_H = 72, GSCREEN_REFRESH_MS = 1500;
+
+        function makeGuestScreen(id, x, y) {
+            const texKey = 'gscreen_' + id;
+            if (game.textures.exists(texKey)) game.textures.remove(texKey);
+            const canvasTex = game.textures.createCanvas(texKey, GSCREEN_W, GSCREEN_H);
+            const frame = game.add.rectangle(x, y, GSCREEN_W + 6, GSCREEN_H + 6, 0x111111, 0.95).setOrigin(0.5);
+            frame.setStrokeStyle(2, 0x000000);
+            frame.setDepth(2602);
+            frame.setVisible(false);
+            const img = game.add.image(x, y, texKey).setOrigin(0.5);
+            img.setDepth(2603);
+            img.setVisible(false);
+            const el = new Image();
+            el.onload = () => {
+                try {
+                    const ctx = canvasTex.context;
+                    ctx.clearRect(0, 0, GSCREEN_W, GSCREEN_H);
+                    ctx.drawImage(el, 0, 0, GSCREEN_W, GSCREEN_H);
+                    canvasTex.refresh();
+                    frame.setVisible(true);
+                    img.setVisible(true);
+                } catch (e) { /* skip bad frame */ }
+            };
+            el.onerror = () => { frame.setVisible(false); img.setVisible(false); };
+            const refresh = () => { el.src = '/agent-screen/' + encodeURIComponent(id) + '?t=' + Date.now(); };
+            refresh();
+            const timer = setInterval(refresh, GSCREEN_REFRESH_MS);
+            return { frame, img, texKey, timer };
+        }
+
+        function positionGuestScreen(screen, x, y) {
+            if (!screen) return;
+            screen.frame.x = x; screen.frame.y = y;
+            screen.img.x = x; screen.img.y = y;
+        }
+
+        function destroyGuestScreen(screen) {
+            if (!screen) return;
+            if (screen.timer) clearInterval(screen.timer);
+            try { screen.frame.destroy(); } catch (e) {}
+            try { screen.img.destroy(); } catch (e) {}
+            if (screen.texKey && game.textures.exists(screen.texKey)) game.textures.remove(screen.texKey);
+        }
+
         function renderGuestAgentsInScene() {
             if (!game) return;
             const visitors = getMergedVisitors();
@@ -3610,6 +3656,8 @@ function toggleBrokerPanel() {
                     nameText.setDepth(2601);
 
                     guestSprites[id] = { sprite, nameText };
+                    const screenY = nameTextY - (GSCREEN_H / 2) - 18;
+                    guestSprites[id].screen = makeGuestScreen(id, p.x, screenY);
                 } else {
                     const g = guestSprites[id];
                     const yOffset = (DEMO_MODE && (agent.agentId === 'demo_mercury' || agent.name === '水星')) ? 10 : 0;
@@ -3650,12 +3698,16 @@ function toggleBrokerPanel() {
                     }
 
                     g.nameText.setText(agent.name || '访客');
+
+                    const nTy = isDemo ? ((p.y + yOffset) - 80) : ((p.y + yOffset) - 120);
+                    if (g.screen) positionGuestScreen(g.screen, p.x, nTy - (GSCREEN_H / 2) - 18);
                 }
             });
 
             // 删除消失的 agent + 清理其气泡/tween
             Object.keys(guestSprites).forEach(id => {
                 if (!seenIds.has(id)) {
+                    destroyGuestScreen(guestSprites[id].screen);
                     guestSprites[id].sprite.destroy();
                     guestSprites[id].nameText.destroy();
                     delete guestSprites[id];
