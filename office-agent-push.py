@@ -165,9 +165,10 @@ def fetch_local_status():
                         state = "idle"
                         detail = f"本地状态超过{STALE_STATE_TTL_SECONDS}s未更新，自动回待命"
 
+                    app = data.get("app", "") if isinstance(data, dict) else ""
                     if VERBOSE:
-                        print(f"[status-source:file] path={fp} state={state} detail={detail[:60]}")
-                    return {"state": state, "detail": detail}
+                        print(f"[status-source:file] path={fp} state={state} detail={detail[:60]} app={app}")
+                    return {"state": state, "detail": detail, "app": app}
         except Exception:
             pass
 
@@ -232,6 +233,7 @@ def do_push(local, status_data):
         "joinKey": local.get("joinKey", JOIN_KEY),
         "state": status_data.get("state", "idle"),
         "detail": status_data.get("detail", ""),
+        "app": status_data.get("app", ""),
         "name": local.get("agentName", AGENT_NAME)
     }
     r = requests.post(f"{OFFICE_URL}{PUSH_ENDPOINT}", json=payload, timeout=10)

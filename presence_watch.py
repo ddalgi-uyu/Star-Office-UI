@@ -75,20 +75,21 @@ def active_window():
 
 def map_app(wm_class, title):
     if not wm_class:
-        return "idle", "🛋 Away"
+        return "idle", "🛋 Away", ""
     for keys, state, label in APP_MAP:
         if any(k in wm_class for k in keys):
-            return state, label
+            return state, label, keys[0]
     # Unknown app: still show it as actively in-app, using a cleaned class name.
     tokens = [t for t in re.split(r"[\s._-]+", wm_class) if t]
     name = tokens[-1].capitalize() if tokens else "App"
-    return "executing", f"🖥 {name}"
+    return "executing", f"🖥 {name}", name
 
 
-def write_state(state, detail):
+def write_state(state, detail, app=""):
     data = {
         "state": state,
         "detail": detail,
+        "app": app,
         "progress": 0,
         "updated_at": datetime.now().isoformat(),
     }
@@ -104,13 +105,13 @@ def main():
     try:
         while True:
             wm_class, title = active_window()
-            state, label = map_app(wm_class, title)
+            state, label, app = map_app(wm_class, title)
             detail = label
             if SHOW_TITLE and title:
                 detail = f"{label} — {title[:40]}"
             if detail != last:
-                write_state(state, detail)
-                print(f"[{datetime.now():%H:%M:%S}] {state:10} {detail}")
+                write_state(state, detail, app)
+                print(f"[{datetime.now():%H:%M:%S}] {state:10} {detail}  (app={app})")
                 last = detail
             time.sleep(INTERVAL)
     except KeyboardInterrupt:
