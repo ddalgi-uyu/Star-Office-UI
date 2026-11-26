@@ -3572,6 +3572,38 @@ function toggleBrokerPanel() {
             if (screen.texKey && game.textures.exists(screen.texKey)) game.textures.remove(screen.texKey);
         }
 
+        // --- App badge: a little "window" popup above the monitor showing the current app ---
+        const APP_EMOJI = {
+            isaac: '🤖', omniverse: '🤖', kit: '🤖', blender: '🎨', unreal: '🎮',
+            code: '💻', cursor: '💻', vscode: '💻', codium: '💻', pycharm: '💻', idea: '💻',
+            firefox: '🔎', chrome: '🔎', chromium: '🔎', brave: '🔎', edge: '🔎',
+            terminal: '⌨️', konsole: '⌨️', kitty: '⌨️', alacritty: '⌨️',
+            obsidian: '📝', typora: '📝', slack: '💬', discord: '💬', zoom: '💬', teams: '💬'
+        };
+        function appLabel(app) {
+            if (!app) return '';
+            const k = String(app).toLowerCase();
+            for (const key in APP_EMOJI) { if (k.includes(key)) return APP_EMOJI[key] + ' ' + app; }
+            return '🖥 ' + app;
+        }
+
+        function makeGuestBadge(id) {
+            const bg = game.add.rectangle(0, 0, 80, 22, 0x1b1f2a, 0.96).setOrigin(0.5).setDepth(2604);
+            bg.setStrokeStyle(2, 0x000000);
+            const txt = game.add.text(0, 0, '', { fontFamily: 'ArkPixel, monospace', fontSize: '12px', fill: '#ffffff' }).setOrigin(0.5).setDepth(2605);
+            bg.setVisible(false); txt.setVisible(false);
+            return {
+                setApp(label) {
+                    if (!label) { bg.setVisible(false); txt.setVisible(false); return; }
+                    txt.setText(label);
+                    bg.width = Math.max(56, label.length * 10 + 20);
+                    bg.setVisible(true); txt.setVisible(true);
+                },
+                setPos(x, y) { bg.x = x; bg.y = y; txt.x = x; txt.y = y; },
+                destroy() { try { bg.destroy(); } catch (e) {} try { txt.destroy(); } catch (e) {} }
+            };
+        }
+
         function renderGuestAgentsInScene() {
             if (!game) return;
             const visitors = getMergedVisitors();
@@ -3656,51 +3688,38 @@ function toggleBrokerPanel() {
                     nameText.setDepth(2601);
 
                     guestSprites[id] = { sprite, nameText };
+                    guestSprites[id].nameDY = isDemo ? 80 : 120;
                     const screenY = nameTextY - (GSCREEN_H / 2) - 18;
                     guestSprites[id].screen = makeGuestScreen(id, p.x, screenY);
+                    guestSprites[id].badge = makeGuestBadge(id);
+                    guestSprites[id].badge.setApp(appLabel(agent.app));
                 } else {
                     const g = guestSprites[id];
                     const yOffset = (DEMO_MODE && (agent.agentId === 'demo_mercury' || agent.name === '水星')) ? 10 : 0;
+                    const moveActive = guestTweens[id] && guestTweens[id].move && guestTweens[id].move.isPlaying && guestTweens[id].move.isPlaying();
 
-                    // demo：平滑移动（避免闪现）；非 demo：保持稳定位置（避免轮询抖动）
                     if (isDemo) {
-                        // kill previous tweens for this id
-                        if (guestTweens[id] && guestTweens[id].move) {
-                            guestTweens[id].move.stop();
-                        }
-                        if (guestTweens[id] && guestTweens[id].name) {
-                            guestTweens[id].name.stop();
-                        }
-
+                        if (guestTweens[id] && guestTweens[id].move) guestTweens[id].move.stop();
                         const duration = 2000 + Math.floor(Math.random() * 1000); // 2~3s 走路感
-                        const ease = 'Sine.easeInOut';
-
-                        const moveTween = game.tweens.add({
-                            targets: g.sprite,
-                            x: p.x,
-                            y: p.y + yOffset,
-                            duration,
-                            ease
-                        });
-                        const nameTween = game.tweens.add({
-                            targets: g.nameText,
-                            x: p.x,
-                            y: (p.y + yOffset) - 80,
-                            duration,
-                            ease
-                        });
-                        guestTweens[id] = { move: moveTween, name: nameTween };
+                        const moveTween = game.tweens.add({ targets: g.sprite, x: p.x, y: p.y + yOffset, duration, ease: 'Sine.easeInOut' });
+                        guestTweens[id] = { move: moveTween };
+                    } else if (area === 'breakroom') {
+                        // Idle wandering: stroll to a random spot in the breakroom when free
+                        if (!moveActive) {
+                            const wp = randomPointInRect(getAreaRect('breakroom'));
+                            const duration = 2600 + Math.floor(Math.random() * 1600);
+                            const moveTween = game.tweens.add({ targets: g.sprite, x: wp.x, y: wp.y + yOffset, duration, ease: 'Sine.easeInOut' });
+                            guestTweens[id] = { move: moveTween };
+                        }
                     } else {
+                        if (guestTweens[id] && guestTweens[id].move) { guestTweens[id].move.stop(); guestTweens[id].move = null; }
                         g.sprite.x = p.x;
                         g.sprite.y = p.y + yOffset;
-                        g.nameText.x = p.x;
-                        g.nameText.y = (p.y + yOffset) - 120;
                     }
 
                     g.nameText.setText(agent.name || '访客');
-
-                    const nTy = isDemo ? ((p.y + yOffset) - 80) : ((p.y + yOffset) - 120);
-                    if (g.screen) positionGuestScreen(g.screen, p.x, nTy - (GSCREEN_H / 2) - 18);
+                    if (g.badge) g.badge.setApp(appLabel(agent.app));
+                    // name tag / monitor / badge positions are updated every frame by the follower in update()
                 }
             });
 
@@ -3708,6 +3727,7 @@ function toggleBrokerPanel() {
             Object.keys(guestSprites).forEach(id => {
                 if (!seenIds.has(id)) {
                     destroyGuestScreen(guestSprites[id].screen);
+                    if (guestSprites[id].badge) guestSprites[id].badge.destroy();
                     guestSprites[id].sprite.destroy();
                     guestSprites[id].nameText.destroy();
                     delete guestSprites[id];
@@ -3745,9 +3765,14 @@ function toggleBrokerPanel() {
                 syncing: ['同步中，马上更新状态', '正在同步进度到系统', '数据同步中请稍候'],
                 error: ['我在 bug 区排查问题', '检测到异常，正在修复', '报警中，先定位再处理']
             };
-            const agentState = (guestAgents.find(a => a.agentId === id) || {}).state || 'idle';
+            const rec = guestAgents.find(a => a.agentId === id) || {};
+            const agentState = rec.state || 'idle';
             const thoughts = statusThoughtsMap[agentState] || statusThoughtsMap.idle;
-            const text = (demoVisitor && demoVisitor.bubbleText) ? demoVisitor.bubbleText : thoughts[Math.floor(Math.random() * thoughts.length)];
+            const customMsg = (rec.message || '').trim();
+            // Custom speech wins: whatever the agent pushed via `message` is what they say.
+            const text = customMsg
+                ? customMsg
+                : ((demoVisitor && demoVisitor.bubbleText) ? demoVisitor.bubbleText : thoughts[Math.floor(Math.random() * thoughts.length)]);
 
             if (guestBubbles[id]) {
                 guestBubbles[id].destroy();
@@ -4624,6 +4649,20 @@ function toggleBrokerPanel() {
                     const by = isDemoGuest ? (g.sprite.y - 90) : ((g.nameText ? g.nameText.y : (g.sprite.y - 150)) - (nameH / 2) - 22);
                     if (b.list && b.list[0]) { b.list[0].x = bx; b.list[0].y = by; }
                     if (b.list && b.list[1]) { b.list[1].x = bx; b.list[1].y = by; }
+                });
+            } catch (e) {}
+
+            // Monitor + app badge + name tag follow their character every frame (smooth while wandering)
+            try {
+                Object.keys(guestSprites).forEach(id => {
+                    const g = guestSprites[id];
+                    if (!g || !g.sprite) return;
+                    const sx = g.sprite.x, sy = g.sprite.y;
+                    const nameY = sy - (g.nameDY || 120);
+                    if (g.nameText) { g.nameText.x = sx; g.nameText.y = nameY; }
+                    const screenYc = nameY - (GSCREEN_H / 2) - 18;
+                    if (g.screen) positionGuestScreen(g.screen, sx, screenYc);
+                    if (g.badge) g.badge.setPos(sx, screenYc - (GSCREEN_H / 2) - 16);
                 });
             } catch (e) {}
 
